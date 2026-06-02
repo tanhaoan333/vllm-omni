@@ -30,6 +30,7 @@ _REF_CONTEXT_CACHE_MAX_BYTES = 64 * 1024 * 1024
 torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
 
+
 def _codec_ids_from_payload_or_input(
     input_ids: torch.Tensor,
     runtime_info: dict[str, Any] | None,
