@@ -12,7 +12,7 @@ from vllm.config import VllmConfig
 from vllm.logger import init_logger
 
 if TYPE_CHECKING:
-    from vllm_omni.model_executor.models.qwen3_tts.qwen3_tts_code2wav import Qwen3TTSCode2Wav
+    pass
 
 logger = init_logger(__name__)
 
