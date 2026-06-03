@@ -31,6 +31,13 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     _omni_enum = OmniPlatformEnum.NPU
     dist_backend: str = "hccl"
 
+    def __init__(self) -> None:
+        from vllm_omni.platforms.npu.models.patch_qwen3_tts_code2wav import (
+            apply_qwen3_tts_code2wav_patch,
+        )
+
+        apply_qwen3_tts_code2wav_patch()
+
     @classmethod
     def set_device(cls, device: torch.device) -> None:
         super().set_device(device)
