@@ -57,10 +57,6 @@ class Qwen3TTSCode2Wav(nn.Module):
     input_modalities = "audio"
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
-        from vllm_omni.platforms import current_omni_platform
-        if current_omni_platform.is_npu():
-            torch.npu.config.allow_internal_format = False
-            torch.npu.set_compile_mode(jit_compile=False)
         super().__init__()
         self.vllm_config = vllm_config
         self.model_path = vllm_config.model_config.model
