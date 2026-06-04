@@ -185,10 +185,14 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
                 )
 
             pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
+            if self.use_compress:
+                self.positions.fill_(127)
+                self._dsa_positions_cpu_buf.fill_(127)
             attn_metadata, _ = self._build_attention_metadata(
                 num_tokens=num_tokens_unpadded,
                 num_tokens_padded=num_tokens_padded,
-                num_reqs=num_reqs_padded,
+                num_reqs=num_reqs,
+                num_reqs_padded=num_reqs_padded,
                 max_query_len=max_query_len,
                 ubatch_slices=ubatch_slices_padded if pad_attn else ubatch_slices,
                 for_cudagraph_capture=is_graph_capturing,
@@ -270,6 +274,8 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
                 aclgraph_runtime_mode=cudagraph_runtime_mode,
                 batch_descriptor=batch_desc,
                 model_instance=self.model,
+                has_sinks=self._has_sinks,
+                input_ids=input_ids,
             ):
                 # ---------------------------------------Omni-new----------------------------------------------
                 if getattr(self.model, "talker", None) is not None and self.has_talker_mtp:
@@ -317,6 +323,10 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
                 target.clear_all_moe_loads()
             if self.dynamic_eplb:
                 self.eplb_updator.forward_end()
+            self._finalize_dump_data(dump=False)
+            if self.use_compress and force_attention:
+                self.positions.fill_(0)
+                self._dsa_positions_cpu_buf.fill_(0)
             return hidden_states, hidden_states
 
     def _model_forward(
