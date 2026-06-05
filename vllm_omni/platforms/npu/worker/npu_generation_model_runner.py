@@ -16,13 +16,13 @@ from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
 from vllm.distributed.kv_transfer import get_kv_transfer_group, has_kv_transfer_group
 from vllm.distributed.parallel_state import get_pp_group
 from vllm.logger import logger
+from vllm.model_executor.layers.fused_moe.routed_experts_capturer import RoutedExpertsCapturer
 from vllm.sequence import IntermediateTensors
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, AsyncModelRunnerOutput, make_empty_encoder_model_runner_output
 from vllm.v1.utils import record_function_or_nullcontext
 from vllm.v1.worker.gpu_model_runner import AsyncGPUModelRunnerOutput, PerLayerAttnMetadata
-from vllm.model_executor.layers.fused_moe.routed_experts_capturer import RoutedExpertsCapturer
 from vllm.v1.worker import mamba_utils
 from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 from vllm.v1.worker.utils import sanity_check_mm_encoder_outputs
@@ -33,7 +33,7 @@ from vllm_ascend.ops.rotary_embedding import update_cos_sin
 from vllm_ascend.utils import enable_sp, lmhead_tp_enable, vllm_version_is
 
 if not vllm_version_is("0.20.2"):
-    from vllm.v1.outputs import RoutedExpertsLists
+    pass
 from vllm_ascend.worker.model_runner_v1 import SEQ_LEN_WITH_MAX_PA_WORKSPACE
 
 from vllm_omni.outputs import OmniModelRunnerOutput
@@ -102,10 +102,7 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
         if self.execute_model_state is not None:
             raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
 
-        if (
-            self.speculative_config is not None
-            and self.speculative_config.use_ngram_gpu()
-        ):
+        if self.speculative_config is not None and self.speculative_config.use_ngram_gpu():
             num_scheduled_tokens_copy = scheduler_output.num_scheduled_tokens.copy()
             spec_decode_tokens_copy = scheduler_output.scheduled_spec_decode_tokens.copy()
             scheduler_output = replace(
@@ -295,9 +292,7 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                     # for requests whose state was copied to a new block.
                     # Re-sync to GPU so the mamba kernel reads from the
                     # correct initial state slot (init_token_idx = 0).
-                    self.num_accepted_tokens.np[:num_reqs] = (
-                        self.input_batch.num_accepted_tokens_cpu[:num_reqs]
-                    )
+                    self.num_accepted_tokens.np[:num_reqs] = self.input_batch.num_accepted_tokens_cpu[:num_reqs]
                     self.num_accepted_tokens.copy_to_gpu(num_reqs)
 
                     if not vllm_version_is("0.20.2") and mamba_bufs.postprocess_align is not None:
@@ -577,9 +572,8 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             self.finalize_kv_connector()
 
         profiling_cfg = self.ascend_config.profiling_chunk_config
-        if (
-            (getattr(profiling_cfg, "need_timing", False) or getattr(profiling_cfg, "enabled", False))
-            and hasattr(self, "_execution_start_time")
+        if (getattr(profiling_cfg, "need_timing", False) or getattr(profiling_cfg, "enabled", False)) and hasattr(
+            self, "_execution_start_time"
         ):
             self._sync_device()
             output.execution_time_ms = (time.perf_counter() - self._execution_start_time) * 1000.0
