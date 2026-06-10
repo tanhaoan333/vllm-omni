@@ -44,7 +44,7 @@ from vllm_omni.utils.speaker_cache import (
 )
 
 from .minicpm4_paged import MiniCPM4PagedForVoxCPM2, MiniCPM4PagedResidualLM
-from .voxcpm2_import_utils import import_voxcpm2_model
+from .voxcpm2_import_utils import import_voxcpm2_core
 
 logger = init_logger(__name__)
 
@@ -869,10 +869,11 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         # will then randomize the just-loaded _tts params — this is intended.
         model_path = vllm_config.model_config.model
         self._device = current_omni_platform.get_torch_device()
-        VoxCPM2Model = import_voxcpm2_model()
+        VoxCPM2Model = import_voxcpm2_core()
         # VoxCPM.from_pretrained() loads V1 VoxCPMModel; VoxCPM2 checkpoints
         # require VoxCPM2Model (fusion_concat_proj, etc.).
-        self._tts: nn.Module = VoxCPM2Model.from_local(model_path, optimize=False).to(self._device)
+        native = VoxCPM2Model.from_pretrained(model_path, load_denoiser=False, optimize=False)
+        self._tts: nn.Module = native.tts_model.to(self._device)
         self._side_dtype = self._tts.fusion_concat_proj.weight.dtype
         self._patch_size = self._tts.patch_size
         self._feat_dim = self._tts.feat_dim
