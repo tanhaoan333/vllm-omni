@@ -36,6 +36,7 @@ from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
+from vllm_omni.platforms import current_omni_platform
 from vllm_omni.utils.speaker_cache import (
     get_speaker_cache,
     iter_custom_voice_profiles,
@@ -43,11 +44,15 @@ from vllm_omni.utils.speaker_cache import (
 )
 
 from .minicpm4_paged import MiniCPM4PagedForVoxCPM2, MiniCPM4PagedResidualLM
-from .voxcpm2_import_utils import import_voxcpm2_core
+from .voxcpm2_import_utils import import_voxcpm2_model
 
 logger = init_logger(__name__)
 
 _ENABLE_NVTX_PROFILE = False
+
+
+def _on_accel_device(tensor: torch.Tensor) -> bool:
+    return tensor.device.type in ("cuda", "npu")
 
 # Lower bound for the _active_states leak-warn threshold.  The effective
 # threshold is max(_ACTIVE_STATE_LEAK_WARN_MIN, 4 * max_batch_size) so small
@@ -863,11 +868,12 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         # the checkpoint download/read cost at construction time; DummyModelLoader
         # will then randomize the just-loaded _tts params — this is intended.
         model_path = vllm_config.model_config.model
-        VoxCPM = import_voxcpm2_core()
-        native = VoxCPM.from_pretrained(model_path, load_denoiser=False, optimize=False)
-        self._tts: nn.Module = native.tts_model.to("cuda")
+        self._device = current_omni_platform.get_torch_device()
+        VoxCPM2Model = import_voxcpm2_model()
+        # VoxCPM.from_pretrained() loads V1 VoxCPMModel; VoxCPM2 checkpoints
+        # require VoxCPM2Model (fusion_concat_proj, etc.).
+        self._tts: nn.Module = VoxCPM2Model.from_local(model_path, optimize=False).to(self._device)
         self._side_dtype = self._tts.fusion_concat_proj.weight.dtype
-        self._device = "cuda"
         self._patch_size = self._tts.patch_size
         self._feat_dim = self._tts.feat_dim
         self._sample_rate = getattr(self.config, "sample_rate", 48000)
@@ -888,8 +894,9 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         # for sliding-window streaming decode. 12 matches the nanovllm reference
         # implementation and covers the longest VAE decoder receptive field.
         self._n_decode_pad_frames = 12
-        self._enable_torch_compile = True
-        self._compile_vae = True
+        on_npu = current_omni_platform.is_npu()
+        self._enable_torch_compile = not on_npu
+        self._compile_vae = not on_npu
         self._max_decode_steps = 2000
         self._max_batch_size = getattr(vllm_config.scheduler_config, "max_num_seqs", 4)
 
@@ -900,15 +907,17 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         self._enable_profiling = self._runtime_config.enable_profiling
         self._perf = _PerfTimer(enabled=self._enable_profiling)
         self._cfm_buffers: _CFMBufferManager | None = None
-        self._enable_cuda_graph = True
+        self._enable_cuda_graph = not on_npu
         self._scaffold_graphs: dict[int, _CapturedGraph] = {}
         self._residual_graphs: dict[int, _CapturedGraph] = {}
         self._decode_graph_capture_policy = self._runtime_config.decode_graph_capture_policy
         self._vae_graphs: dict[tuple[int, int], _CapturedVAEGraph] = {}
-        self._enable_vae_cuda_graph = self._runtime_config.enable_vae_cuda_graph
+        self._enable_vae_cuda_graph = False if on_npu else self._runtime_config.enable_vae_cuda_graph
         self._cfm_graphs: dict[int, _CapturedCFMGraph] = {}
-        self._enable_cfm_cuda_graph = self._runtime_config.enable_cfm_cuda_graph
-        self._enable_cfm_prealloc_output = self._runtime_config.enable_cfm_prealloc_output
+        self._enable_cfm_cuda_graph = False if on_npu else self._runtime_config.enable_cfm_cuda_graph
+        self._enable_cfm_prealloc_output = (
+            False if on_npu else self._runtime_config.enable_cfm_prealloc_output
+        )
         self._enable_batched_cfm = self._runtime_config.enable_batched_cfm
         self._deterministic_cfm_noise = self._runtime_config.deterministic_cfm_noise
         self._deterministic_cfm_seed = self._runtime_config.deterministic_cfm_seed
@@ -916,7 +925,9 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         self._audio_emit_every = self._runtime_config.audio_emit_every
         self._vae_decode_every = self._runtime_config.vae_decode_every
         self._enable_delayed_audio_copy = self._runtime_config.enable_delayed_audio_copy
-        self._delayed_audio_copy_use_events = self._runtime_config.delayed_audio_copy_use_events
+        self._delayed_audio_copy_use_events = (
+            False if on_npu else self._runtime_config.delayed_audio_copy_use_events
+        )
         self._coalesce_audio_d2h = self._runtime_config.coalesce_audio_d2h
         self._enable_batched_vae_decode = self._runtime_config.enable_batched_vae_decode
         self._enable_batched_fsq_fusion = self._runtime_config.enable_batched_fsq_fusion
@@ -1382,7 +1393,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         return sr_cond
 
     def _run_vae_decode(self, feat: torch.Tensor) -> torch.Tensor:
-        if not feat.is_cuda:
+        if not _on_accel_device(feat):
             return self.tts.audio_vae.decode(feat)
 
         sr_cond = self._get_vae_decode_sr_cond(feat.device)
@@ -2057,7 +2068,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
 
     def _enqueue_delayed_audio_copy(self, state: _RequestState, audio: torch.Tensor) -> None:
         src = audio.detach().contiguous()
-        if not src.is_cuda:
+        if not _on_accel_device(src):
             state.pending_audio_copies.append(_PendingAudioCopy(host=src.cpu().contiguous()))
             return
 
@@ -2145,7 +2156,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
             if state.is_stopping or state.precomputed_is_stopping is not None:
                 continue
             stop_logits = state.precomputed_stop_logits
-            if stop_logits is None or not stop_logits.is_cuda:
+            if stop_logits is None or not _on_accel_device(stop_logits):
                 continue
             pending.append((state, stop_logits))
         if not pending:
@@ -2426,7 +2437,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
                 if self._uses_sparse_audio_outputs():
                     ready_req_ids = list(audio_by_req)
                     chunks = [audio_by_req[req_id].reshape(-1) for req_id in ready_req_ids]
-                    if self._coalesce_audio_d2h and any(chunk.is_cuda for chunk in chunks):
+                    if self._coalesce_audio_d2h and any(_on_accel_device(chunk) for chunk in chunks):
                         sizes = [int(chunk.numel()) for chunk in chunks]
                         merged = torch.cat(chunks, dim=0) if len(chunks) > 1 else chunks[0]
                         merged_cpu = merged.detach().cpu().contiguous()
@@ -2435,7 +2446,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
                         mm["model_outputs"] = chunks
                     mm["sr"] = [sr for _ in ready_req_ids]
                     mm["meta"] = {"req_id": ready_req_ids, "sparse_audio": ["1"]}
-                elif self._coalesce_audio_d2h and any(audio.is_cuda for audio in audio_by_req.values()):
+                elif self._coalesce_audio_d2h and any(_on_accel_device(audio) for audio in audio_by_req.values()):
                     ready_req_ids = list(audio_by_req)
                     chunks = [audio_by_req[req_id].reshape(-1) for req_id in ready_req_ids]
                     sizes = [int(chunk.numel()) for chunk in chunks]
