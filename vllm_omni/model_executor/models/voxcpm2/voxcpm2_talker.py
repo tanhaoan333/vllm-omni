@@ -910,9 +910,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         self._enable_vae_cuda_graph = use_cuda_graph and self._runtime_config.enable_vae_cuda_graph
         self._cfm_graphs: dict[int, _CapturedCFMGraph] = {}
         self._enable_cfm_cuda_graph = use_cuda_graph and self._runtime_config.enable_cfm_cuda_graph
-        self._enable_cfm_prealloc_output = (
-            use_cuda_graph and self._runtime_config.enable_cfm_prealloc_output
-        )
+        self._enable_cfm_prealloc_output = use_cuda_graph and self._runtime_config.enable_cfm_prealloc_output
         self._enable_batched_cfm = self._runtime_config.enable_batched_cfm
         self._deterministic_cfm_noise = self._runtime_config.deterministic_cfm_noise
         self._deterministic_cfm_seed = self._runtime_config.deterministic_cfm_seed
@@ -920,9 +918,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         self._audio_emit_every = self._runtime_config.audio_emit_every
         self._vae_decode_every = self._runtime_config.vae_decode_every
         self._enable_delayed_audio_copy = self._runtime_config.enable_delayed_audio_copy
-        self._delayed_audio_copy_use_events = (
-            use_cuda_graph and self._runtime_config.delayed_audio_copy_use_events
-        )
+        self._delayed_audio_copy_use_events = use_cuda_graph and self._runtime_config.delayed_audio_copy_use_events
         self._coalesce_audio_d2h = self._runtime_config.coalesce_audio_d2h
         self._enable_batched_vae_decode = self._runtime_config.enable_batched_vae_decode
         self._enable_batched_fsq_fusion = self._runtime_config.enable_batched_fsq_fusion
@@ -2444,8 +2440,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
                     mm["sr"] = [sr for _ in ready_req_ids]
                     mm["meta"] = {"req_id": ready_req_ids, "sparse_audio": ["1"]}
                 elif self._coalesce_audio_d2h and any(
-                    audio.device.type == current_omni_platform.device_type
-                    for audio in audio_by_req.values()
+                    audio.device.type == current_omni_platform.device_type for audio in audio_by_req.values()
                 ):
                     ready_req_ids = list(audio_by_req)
                     chunks = [audio_by_req[req_id].reshape(-1) for req_id in ready_req_ids]
