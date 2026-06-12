@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """VoxCPM2 AR talker — PagedAttention pipeline with per-request state.
-1
+
 Architecture:
   MiniCPM4PagedForVoxCPM2 (base_lm, 28 layers, PagedAttention + fp32 RoPE)
   → FSQ → MiniCPM4PagedResidualLM (8 layers, PagedAttention, no RoPE)
@@ -283,7 +283,8 @@ def _encode_raw_audio(
         pad = (padding_size, 0) if padding_mode == "left" else (0, padding_size)
         audio = torch.nn.functional.pad(audio, pad)
 
-    feat = tts.audio_vae.encode(audio.to(tts.device), encode_sr).cpu()
+    vae_device = next(tts.audio_vae.parameters()).device
+    feat = tts.audio_vae.encode(audio.to(vae_device), encode_sr).cpu()
     return feat.view(tts.audio_vae.latent_dim, -1, tts.patch_size).permute(1, 2, 0)
 
 
