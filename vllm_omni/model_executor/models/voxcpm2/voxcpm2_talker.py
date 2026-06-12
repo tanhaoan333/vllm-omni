@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """VoxCPM2 AR talker — PagedAttention pipeline with per-request state.
-
+1
 Architecture:
   MiniCPM4PagedForVoxCPM2 (base_lm, 28 layers, PagedAttention + fp32 RoPE)
   → FSQ → MiniCPM4PagedResidualLM (8 layers, PagedAttention, no RoPE)
