@@ -10,6 +10,7 @@ Use an available physical NPU and a downloaded
 `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` checkpoint:
 
 ```bash
+VLLM_USE_V2_MODEL_RUNNER=0 \
 ASCEND_RT_VISIBLE_DEVICES=0 \
 COSYVOICE3_STAGE1_NPU_GRAPH=1 \
 COSYVOICE3_BATCH_FLOW=1 \
@@ -29,9 +30,14 @@ Every request still needs `ref_audio` and `ref_text`; see the
 | `codec_max_chunk_frames` | 96 | Cap later hops |
 | `codec_left_context_frames` | 25 | Retain existing left context |
 | `connector_get_sleep_s` | 0.01 | Keep the existing polling interval |
+| `VLLM_USE_V2_MODEL_RUNNER` | `0` | Match Ascend forward-context storage to the V1 runner used by the Omni NPU AR worker |
 | Stage-0 graph mode | `FULL_DECODE_ONLY` | Capture decode; prefill stays eager |
 | Stage-1 `enforce_eager` | `false` | Enable internal Flow and HiFT graphs |
 | Stage-1 outer graph mode | `NONE` | Keep request state outside capture |
+
+The V1 runner selection is required with the current vLLM-Ascend integration.
+Without it, ACL graph capture can miss the attention replay-update registration
+because the V1 runner and V2 forward context store capture state differently.
 
 The nominal hop progression is 4, 96, 96, ...; prompt alignment can change the
 first hop. At 25 speech tokens per second, these nominal increments represent
@@ -81,8 +87,14 @@ YAML or a benchmark of the latest upstream revision. Generated durations vary.
 The final 96 stable requests had 2 TTFP outliers up to 501.26 ms and no RTF
 above 0.6; the two first-concurrency rounds averaged 589.49 ms TTFP, with one
 RTF outlier above 0.6. No per-request latency guarantee is implied.
-WER, speaker similarity, audio continuity, peak memory, other concurrency
-levels, and other Ascend products were not validated by these measurements.
+The combined profile was also evaluated on the 2,020-utterance Chinese standard
+split of seed-tts-eval at concurrency 8 and seed 0. Generation completed without
+request failures. Paraformer scoring produced 1.1797% mean per-utterance WER,
+1.2327% corpus character error rate, no empty ASR outputs, and no utterance above
+50% WER. A serial scorer and a four-process scorer agreed on all 2,020 rows.
+These are combined integration quality results rather than an isolated score for
+this YAML. Speaker similarity, audio continuity, peak memory, other concurrency
+levels, and other Ascend products were not validated.
 
 Disable internal Stage-1 graphs with `enforce_eager: true` or
 `COSYVOICE3_STAGE1_NPU_GRAPH=0`. Capture failure requires restarting the stage;
