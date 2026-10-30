@@ -95,6 +95,21 @@ class ConditionalCFM(BASECFM):
             return self.solve_euler(z, t_span=t_span, mu=mu, mask=mask, spks=spks, cond=cond), cache
 
     def solve_euler(self, x, t_span, mu, mask, spks, cond):
+        runner = getattr(self, "_npu_euler_graphs", None)
+        if runner is None or spks is None or cond is None or not isinstance(self.estimator, nn.Module):
+            return self._solve_euler(x, t_span, mu, mask, spks, cond)
+        # Noise is drawn by forward() outside capture and copied on every replay.
+        # Shapes/dtypes are keyed by the runner; changing the CFG coefficient or
+        # autocast policy also requires a distinct graph.
+        autocast = torch.is_autocast_enabled("npu")
+        return runner.run(
+            "cfm_euler",
+            (x, t_span, mu, mask, spks, cond),
+            (self.inference_cfg_rate, autocast, torch.get_autocast_dtype("npu") if autocast else None),
+            lambda *values: (self._solve_euler(*values),),
+        )[0]
+
+    def _solve_euler(self, x, t_span, mu, mask, spks, cond):
         """
         Fixed euler solver for ODEs.
         Args:

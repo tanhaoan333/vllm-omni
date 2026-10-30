@@ -97,9 +97,16 @@ class CosyVoice3Code2Wav(nn.Module):
     # the tensors and copy to host without taking another device snapshot.
     owns_generation_output_storage = True
 
-    def __init__(self, config: CosyVoice3Config):
+    def __init__(self, config: CosyVoice3Config, *, enable_npu_graphs: bool = False):
         super().__init__()
         self.config = config
+        self._enable_npu_graphs = enable_npu_graphs and os.environ.get(
+            "COSYVOICE3_STAGE1_NPU_GRAPH", "1"
+        ).lower() not in ("0", "false", "no")
+        if self._enable_npu_graphs:
+            from vllm_omni.platforms.npu.models.cosyvoice3_graph import prepare_cosyvoice3_graph_runtime
+
+            prepare_cosyvoice3_graph_runtime()
 
         # Build flow matching components
         pre_lookahead_layer = PreLookaheadLayer(**config.flow["pre_lookahead_layer"])
@@ -774,6 +781,10 @@ class CosyVoice3Code2Wav(nn.Module):
         if f0_folded == 0:
             logger.warning("HiFT F0 predictor had no weight-norm layers to fold; check config drift")
         self.hift.eval()
+        if self._enable_npu_graphs and device.type == "npu":
+            from vllm_omni.platforms.npu.models.cosyvoice3_graph import enable_cosyvoice3_graphs
+
+            enable_cosyvoice3_graphs(self.flow_model.decoder, self.hift)
         if device.type == "cuda" and cosyvoice3_packed_streaming_enabled():
             if os.getenv("COSYVOICE3_CACHED_ISTFT", "0") == "1":
                 self.hift.enable_cached_istft()

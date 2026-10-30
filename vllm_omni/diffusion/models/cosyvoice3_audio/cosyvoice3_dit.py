@@ -107,6 +107,7 @@ class DiTAttention(nn.Module):
         self.inner_dim = dim_head * heads
         self.dropout = dropout
         self.scale = 1.0 / math.sqrt(dim_head)
+        self._use_npu_graph_attention = False
 
         # Q/K/V projections
         self.to_q = nn.Linear(dim, self.inner_dim)
@@ -153,7 +154,12 @@ class DiTAttention(nn.Module):
             # The diffusion Attention layer expects (batch, seq, heads, head_dim)
             attn_mask = _normalize_attention_mask(mask, batch_size, seq_len)
             attn_metadata = AttentionMetadata(attn_mask=attn_mask) if attn_mask is not None else None
-            out = self.attn(query, key, value, attn_metadata=attn_metadata)
+            if self._use_npu_graph_attention and query.device.type == "npu":
+                from vllm_omni.platforms.npu.models.cosyvoice3_graph import cosyvoice3_graph_attention
+
+                out = cosyvoice3_graph_attention(query, key, value, attn_mask, self.scale)
+            else:
+                out = self.attn(query, key, value, attn_metadata=attn_metadata)
 
         with cosyvoice3_batch_flow_profile("cosyvoice3_dit_attention_output_projection"):
             # Some attention backends return a non-contiguous layout.
