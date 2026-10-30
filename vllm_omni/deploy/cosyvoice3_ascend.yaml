@@ -1,0 +1,70 @@
+# CosyVoice3 opt-in Ascend streaming profile.
+# Both stages share logical NPU 0. Select the physical NPU with
+# ASCEND_RT_VISIBLE_DEVICES; this profile is not automatically selected.
+# Stage 0 captures decode only. Stage 1 uses internal Flow/HiFT NPUGraphs,
+# keeping outer compilation disabled for dynamic request and streaming state.
+# The first codec hop is 4; subsequent hops grow to 96 (subject to prompt
+# alignment). Larger later chunks reduce decoder calls but coarsen streaming.
+# Warm up at the target concurrency: unseen signatures capture lazily.
+# See recipes/FunAudioLLM/CosyVoice3-Ascend.md for scope and limitations.
+pipeline: cosyvoice3
+async_chunk: true
+connectors:
+  connector_of_shared_memory:
+    name: SharedMemoryConnector
+    extra:
+      codec_streaming: true
+      connector_get_sleep_s: 0.01
+      connector_get_max_wait_first_chunk: 3000
+      connector_get_max_wait: 300
+      codec_chunk_frames: 4
+      codec_stream_scale_factor: 24
+      codec_max_chunk_frames: 96
+      codec_left_context_frames: 25
+      codec_vocab_size: 6561
+
+stages:
+  - stage_id: 0
+    max_num_batched_tokens: 32768
+    max_num_seqs: 8
+    gpu_memory_utilization: 0.4
+    enforce_eager: false
+    compilation_config:
+      mode: 3  # CompilationMode.VLLM_COMPILE
+      cudagraph_mode: FULL_DECODE_ONLY
+      # Capture decode graphs; prefill runs eagerly.
+    trust_remote_code: true
+    enable_prefix_caching: false
+    devices: "0"
+    output_connectors:
+      to_stage_1: connector_of_shared_memory
+    default_sampling_params:
+      max_tokens: 2048
+      top_k: 25
+      top_p: 0.8
+      # near-identity repetition penalty forces vLLM to track
+      # output_token_ids for RAS (stop-token logit logsumexp).
+      repetition_penalty: 1.0001
+    disable_hybrid_kv_cache_manager: true
+    mm_processor_cache_gb: 0
+    skip_mm_profiling: true
+
+  - stage_id: 1
+    max_num_batched_tokens: 32768
+    max_num_seqs: 8
+    gpu_memory_utilization: 0.2
+    enforce_eager: false
+    # Graph boundaries are inside Code2Wav, not around its dynamic forward.
+    compilation_config:
+      mode: 0
+      cudagraph_mode: NONE
+    trust_remote_code: true
+    enable_prefix_caching: false
+    max_model_len: 32768
+    devices: "0"
+    input_connectors:
+      from_stage_0: connector_of_shared_memory
+    default_sampling_params:
+      max_tokens: 2048
+    disable_hybrid_kv_cache_manager: true
+    skip_mm_profiling: true

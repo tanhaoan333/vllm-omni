@@ -164,6 +164,10 @@ The H200 default targets streaming throughput at C32/C64. It changes sampling fr
 
 Pass `--no-async-chunk` (or `NO_ASYNC_CHUNK=1 ./cosyvoice3/run_server.sh`) for the legacy synchronous path; use `--deploy-config cosyvoice3.yaml` alongside it when selecting that path on H200.
 
+For the opt-in Ascend streaming profile, graph warmup requirements, and
+chunk-size tradeoffs, see the
+[CosyVoice3 Ascend recipe](../../../../recipes/FunAudioLLM/CosyVoice3-Ascend.md).
+
 Cross-request Stage-1 flow batching is enabled in the H200 profile. For the generic configuration, enable it in the server environment when concurrent requests should share a flow-estimator call:
 
 ```bash
