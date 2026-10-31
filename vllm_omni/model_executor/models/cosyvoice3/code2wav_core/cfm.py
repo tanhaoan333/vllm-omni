@@ -154,6 +154,19 @@ class ConditionalCFM(BASECFM):
             if cond is not None:
                 cond_in[:batch_size] = cond
 
+        blocked_attn_mask = None
+        if isinstance(self.estimator, torch.nn.Module) and getattr(
+            self.estimator, "_use_npu_graph_attention", False
+        ):
+            from vllm_omni.platforms.npu.models.cosyvoice3_graph import cosyvoice3_fia_blocked_mask
+
+            keep_mask = mask_in[:, 0].bool()
+            blocked_attn_mask = cosyvoice3_fia_blocked_mask(
+                keep_mask,
+                query_len=x_in.shape[2],
+                key_len=x_in.shape[2],
+            )
+
         estimator_session = nullcontext(None)
         if not isinstance(self.estimator, torch.nn.Module):
             session_factory = getattr(self.estimator, "estimation_session", None)
@@ -176,6 +189,7 @@ class ConditionalCFM(BASECFM):
                         spks_in,
                         cond_in,
                         estimator_session=trt_session,
+                        blocked_attn_mask=blocked_attn_mask,
                     )
                 with cosyvoice3_batch_flow_profile("cosyvoice3_cfm_cfg_combine"):
                     dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [batch_size, batch_size], dim=0)
@@ -189,8 +203,28 @@ class ConditionalCFM(BASECFM):
 
         return sol[-1].float()
 
-    def forward_estimator(self, x, mask, mu, t, spks, cond, estimator_session=None):
+    def forward_estimator(
+        self,
+        x,
+        mask,
+        mu,
+        t,
+        spks,
+        cond,
+        estimator_session=None,
+        blocked_attn_mask=None,
+    ):
         if isinstance(self.estimator, torch.nn.Module):
+            if blocked_attn_mask is not None:
+                return self.estimator(
+                    x,
+                    mask,
+                    mu,
+                    t,
+                    spks,
+                    cond,
+                    blocked_attn_mask=blocked_attn_mask,
+                )
             return self.estimator(x, mask, mu, t, spks, cond)
         elif estimator_session is not None:
             return estimator_session.run(x, mask, mu, t, spks, cond)

@@ -10,11 +10,10 @@ and attention-mask semantics without padding the sequence.
 
 from __future__ import annotations
 
-import os
-
 import torch
 from vllm.logger import init_logger
 
+from vllm_omni.model_executor.models.cosyvoice3.runtime import cosyvoice3_stage1_npu_graph_max
 from vllm_omni.platforms.npu.graph_tools import NPUExactGraphRunner
 
 logger = init_logger(__name__)
@@ -22,7 +21,9 @@ _DISABLE_HINT = "set enforce_eager: true on Stage 1"
 
 
 def prepare_cosyvoice3_graph_runtime() -> None:
-    """Select graph-capturable ACLNN convolutions before model construction."""
+    """Select graph-capturable process-wide NPU runtime behavior."""
+    import os
+
     if os.environ.get("ASCEND_LAUNCH_BLOCKING") == "1":
         raise RuntimeError(
             "CosyVoice3 Stage-1 NPUGraph is incompatible with ASCEND_LAUNCH_BLOCKING=1; "
@@ -34,11 +35,27 @@ def prepare_cosyvoice3_graph_runtime() -> None:
     torch.npu.set_compile_mode(jit_compile=False)
 
 
+def cosyvoice3_fia_blocked_mask(
+    keep_mask: torch.Tensor,
+    query_len: int,
+    key_len: int,
+) -> torch.Tensor:
+    """Materialize FIA's blocked-mask convention once per Flow solve."""
+    if keep_mask.dtype is not torch.bool:
+        raise TypeError(f"CosyVoice3 FIA keep_mask must be bool, got {keep_mask.dtype}")
+    if keep_mask.ndim != 2 or keep_mask.shape[1] != key_len:
+        raise ValueError(
+            "CosyVoice3 FIA keep_mask must have shape "
+            f"(batch, {key_len}), got {tuple(keep_mask.shape)}"
+        )
+    return (~keep_mask[:, None, None, :]).expand(keep_mask.shape[0], 1, query_len, key_len).contiguous()
+
+
 def cosyvoice3_graph_attention(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
-    keep_mask: torch.Tensor | None,
+    blocked_mask: torch.Tensor | None,
     scale: float,
 ) -> torch.Tensor:
     """Static noncausal attention using the graph-capturable inference API.
@@ -49,17 +66,16 @@ def cosyvoice3_graph_attention(
     """
     import torch_npu
 
-    batch, seq_len, heads, _ = query.shape
+    heads = query.shape[2]
     if query.dtype not in (torch.float16, torch.bfloat16):
         raise ValueError("CosyVoice3 Stage-1 NPU graph attention requires float16 or bfloat16")
-    blocked = None
-    if keep_mask is not None:
-        blocked = (~keep_mask[:, None, None, :]).expand(batch, 1, seq_len, key.shape[1]).contiguous()
+    if blocked_mask is not None and blocked_mask.dtype is not torch.bool:
+        raise TypeError(f"CosyVoice3 FIA blocked_mask must be bool, got {blocked_mask.dtype}")
     out = torch_npu.npu_fused_infer_attention_score(
         query.transpose(1, 2).contiguous(),
         key.transpose(1, 2).contiguous(),
         value.transpose(1, 2).contiguous(),
-        atten_mask=blocked,
+        atten_mask=blocked_mask,
         num_heads=heads,
         input_layout="BNSD",
         scale=scale,
@@ -77,7 +93,7 @@ class CosyVoice3HiFTGraphs:
         self.hift = hift
         # ISTFT envelopes originate outside capture. The bounded eager cache
         # can evict them later, but recorded tasks must keep their storage alive.
-        self._captured_envelopes: dict[int, torch.Tensor] = {}
+        self._captured_envelopes: dict[tuple[object, ...], torch.Tensor] = {}
         self.runner = NPUExactGraphRunner(
             max_graphs=max_graphs,
             component_name="CosyVoice3 Stage-1 HiFT decode",
@@ -87,15 +103,22 @@ class CosyVoice3HiFTGraphs:
     def run(self, mel: torch.Tensor, source: torch.Tensor, finalize: bool) -> torch.Tensor:
         autocast = torch.is_autocast_enabled("npu")
         captures_before = self.runner.stats["captures"]
-        output = self.runner.run(
-            "hift_decode",
-            (mel, source),
-            (finalize, autocast, torch.get_autocast_dtype("npu") if autocast else None),
-            lambda x, s: (self.hift._decode_eager(x, s, finalize=finalize),),
-        )[0]
+        touched_keys: set[tuple[object, ...]] = set()
+        self.hift._npu_istft_envelope_accesses = touched_keys
+        try:
+            output = self.runner.run(
+                "hift_decode",
+                (mel, source),
+                (finalize, autocast, torch.get_autocast_dtype("npu") if autocast else None),
+                lambda x, s: (self.hift._decode_eager(x, s, finalize=finalize),),
+            )[0]
+        finally:
+            self.hift._npu_istft_envelope_accesses = None
         if self.runner.stats["captures"] > captures_before:
-            for envelope in self.hift._npu_istft_envelopes.values():
-                self._captured_envelopes[id(envelope)] = envelope
+            for key in touched_keys:
+                envelope = self.hift._npu_istft_envelopes.get(key)
+                if envelope is not None:
+                    self._captured_envelopes[key] = envelope
         return output
 
 
@@ -103,11 +126,17 @@ def enable_cosyvoice3_graphs(decoder: torch.nn.Module, hift: torch.nn.Module) ->
     """Install graph regions after weights, evaluation mode and DFT setup."""
     if decoder.training or hift.training:
         raise ValueError("CosyVoice3 Stage-1 NPUGraph requires eval() before capture")
-    max_graphs = int(os.environ.get("COSYVOICE3_STAGE1_NPU_GRAPH_MAX", "8"))
-    if max_graphs <= 0:
-        raise ValueError("COSYVOICE3_STAGE1_NPU_GRAPH_MAX must be positive; " + _DISABLE_HINT)
+    estimator_dtype = next(decoder.estimator.parameters()).dtype
+    if estimator_dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError(
+            "CosyVoice3 Stage-1 NPU graph adapter requires a float16 or bfloat16 DiT, "
+            f"got {estimator_dtype}; {_DISABLE_HINT}."
+        )
+    prepare_cosyvoice3_graph_runtime()
+    max_graphs = cosyvoice3_stage1_npu_graph_max()
     for block in decoder.estimator.transformer_blocks:
         block.attn._use_npu_graph_attention = True
+    decoder.estimator._use_npu_graph_attention = True
     decoder._npu_euler_graphs = NPUExactGraphRunner(
         max_graphs=max_graphs,
         component_name="CosyVoice3 Stage-1 Flow Euler",

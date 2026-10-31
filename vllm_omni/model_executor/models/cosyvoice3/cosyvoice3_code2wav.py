@@ -38,6 +38,7 @@ from vllm_omni.model_executor.models.cosyvoice3.runtime import (
     cosyvoice3_full_response_enabled,
     cosyvoice3_packed_inference_enabled,
     cosyvoice3_packed_streaming_enabled,
+    cosyvoice3_stage1_npu_graph_enabled,
 )
 from vllm_omni.transformers_utils.configs.cosyvoice3 import CosyVoice3Config
 
@@ -100,13 +101,10 @@ class CosyVoice3Code2Wav(nn.Module):
     def __init__(self, config: CosyVoice3Config, *, enable_npu_graphs: bool = False):
         super().__init__()
         self.config = config
-        self._enable_npu_graphs = enable_npu_graphs and os.environ.get(
-            "COSYVOICE3_STAGE1_NPU_GRAPH", "1"
-        ).lower() not in ("0", "false", "no")
-        if self._enable_npu_graphs:
-            from vllm_omni.platforms.npu.models.cosyvoice3_graph import prepare_cosyvoice3_graph_runtime
-
-            prepare_cosyvoice3_graph_runtime()
+        # Keep existing NPU deployments unchanged unless the adapter is
+        # explicitly requested. Runtime-wide NPU settings are applied only
+        # after load_weights confirms that this stage is placed on NPU.
+        self._enable_npu_graphs = enable_npu_graphs and cosyvoice3_stage1_npu_graph_enabled()
 
         # Build flow matching components
         pre_lookahead_layer = PreLookaheadLayer(**config.flow["pre_lookahead_layer"])

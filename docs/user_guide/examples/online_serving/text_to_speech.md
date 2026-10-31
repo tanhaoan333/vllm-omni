@@ -177,7 +177,12 @@ Batching preserves output lengths and streaming cache alignment, but the differe
 
 On Ascend NPU, Stage 1 can capture the complete Flow Euler solve and the
 deterministic HiFT decode as separate exact-shape NPUGraph regions. In a copy
-of the deploy YAML, set Stage 1 to:
+of the deploy YAML, set Stage 1 to the following and opt in through the server
+environment:
+
+```bash
+export COSYVOICE3_STAGE1_NPU_GRAPH=1
+```
 
 ```yaml
 enforce_eager: false
@@ -189,15 +194,18 @@ compilation_config:
 The outer stage remains dynamic; graph capture happens inside Code2Wav.
 The opt-in NPU path uses `torch_npu.npu_fused_infer_attention_score` for the
 DiT's dense noncausal FP16/BF16 attention and the existing real-valued DFT
-implementation for HiFT. Its graph attention region directly selects FIA;
-other attention backend selections do not replace FIA inside that region.
+implementation for HiFT. FIA applies whenever the adapter is enabled,
+including eager warmup, unsupported graph signatures, and new shapes beyond
+the graph-cache limit. Other attention backend selections do not replace FIA
+on these adapter-owned paths.
 Keep Stage 1 eager when comparing another attention backend.
 Fresh noise, reference preprocessing, CPU F0, oscillator state, and request
 cache updates stay outside capture. Final and non-final HiFT calls use
 separate signatures; output buffers remain owned by each request.
 
-`COSYVOICE3_STAGE1_NPU_GRAPH=0` or Stage-1 `enforce_eager: true` disables the
-internal graphs. `COSYVOICE3_STAGE1_NPU_GRAPH_MAX` defaults to 8 graphs per
+The adapter is disabled by default. Leave `COSYVOICE3_STAGE1_NPU_GRAPH` unset,
+set it to `0`, or use Stage-1 `enforce_eager: true` to retain the generic path.
+`COSYVOICE3_STAGE1_NPU_GRAPH_MAX` defaults to 8 graphs per
 region; new shapes beyond that limit run eagerly. A new shape first runs an
 eager warmup and capture, so warm up at the intended concurrency before
 reporting steady-state latency. Capture errors require restarting the stage;
