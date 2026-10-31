@@ -155,9 +155,7 @@ class ConditionalCFM(BASECFM):
                 cond_in[:batch_size] = cond
 
         blocked_attn_mask = None
-        if isinstance(self.estimator, torch.nn.Module) and getattr(
-            self.estimator, "_use_npu_graph_attention", False
-        ):
+        if isinstance(self.estimator, torch.nn.Module) and getattr(self.estimator, "_use_npu_graph_attention", False):
             from vllm_omni.platforms.npu.models.cosyvoice3_graph import cosyvoice3_fia_blocked_mask
 
             keep_mask = mask_in[:, 0].bool()

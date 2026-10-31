@@ -44,10 +44,7 @@ def cosyvoice3_fia_blocked_mask(
     if keep_mask.dtype is not torch.bool:
         raise TypeError(f"CosyVoice3 FIA keep_mask must be bool, got {keep_mask.dtype}")
     if keep_mask.ndim != 2 or keep_mask.shape[1] != key_len:
-        raise ValueError(
-            "CosyVoice3 FIA keep_mask must have shape "
-            f"(batch, {key_len}), got {tuple(keep_mask.shape)}"
-        )
+        raise ValueError(f"CosyVoice3 FIA keep_mask must have shape (batch, {key_len}), got {tuple(keep_mask.shape)}")
     return (~keep_mask[:, None, None, :]).expand(keep_mask.shape[0], 1, query_len, key_len).contiguous()
 
 
