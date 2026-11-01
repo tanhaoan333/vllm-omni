@@ -779,7 +779,11 @@ class CosyVoice3Code2Wav(nn.Module):
         if f0_folded == 0:
             logger.warning("HiFT F0 predictor had no weight-norm layers to fold; check config drift")
         self.hift.eval()
-        if self._enable_npu_graphs and device.type == "npu":
+        # Some lightweight loaders construct this module with ``__new__`` and
+        # attach only the components needed by ``load_weights``. Treat a
+        # missing graph flag as disabled, matching the adapter's opt-in
+        # contract and preserving those compatibility paths.
+        if getattr(self, "_enable_npu_graphs", False) and device.type == "npu":
             from vllm_omni.platforms.npu.models.cosyvoice3_graph import enable_cosyvoice3_graphs
 
             enable_cosyvoice3_graphs(self.flow_model.decoder, self.hift)
