@@ -1,0 +1,11 @@
+--- /home/t00953717/hyimage_e2e/shared_experts.py.original	2026-11-04 18:29:06.000000000 +0000
++++ /vllm-workspace/vllm-ascend/vllm_ascend/ops/fused_moe/shared_experts.py	2026-11-17 11:10:17.860000000 +0000
+@@ -620,6 +620,8 @@
+         return self.part2(submitted_gate_up.hidden_states, (quantized_x, swiglu_out_scale))
+ 
+     def _can_fuse_w8a8_mxfp_activation(self, gate_up: torch.Tensor) -> bool:
++        # Temporary A/B experiment: identical unfused activation in both runs.
++        return False
+         if self.quant_type != QuantType.W8A8MXFP or has_lora(self.lora_context):
+             return False
+ 

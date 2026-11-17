@@ -1,0 +1,86 @@
+pipeline: hunyuan_image_3_moe
+async_chunk: false
+trust_remote_code: true
+connectors:
+  rdma_connector:
+    name: MooncakeTransferEngineConnector
+    extra:
+      host: auto
+      zmq_port: 50051
+      protocol: tcp
+      device_name: ''
+      memory_pool_size: 4294967296
+      memory_pool_device: cpu
+  yuanrong_te_connector:
+    name: YuanrongTransferEngineConnector
+    extra:
+      host: auto
+      zmq_port: 50051
+      rpc_port: auto
+      protocol: ascend
+      device_name: auto
+      memory_pool_size: 1073741824
+      memory_pool_device: npu
+  shared_memory_connector:
+    name: SharedMemoryConnector
+stages:
+- stage_id: 0
+  max_num_seqs: 1
+  gpu_memory_utilization: 0.75
+  enforce_eager: false
+  max_num_batched_tokens: 8192
+  devices: 0,1,2,3
+  tensor_parallel_size: 4
+  hf_overrides:
+    rope_parameters:
+      mrope_section:
+      - 0
+      - 32
+      - 32
+      rope_type: default
+  omni_kv_config:
+    need_send_cache: true
+  output_connectors:
+    to_stage_1: rdma_connector
+  default_sampling_params:
+    temperature: 0.0
+    top_p: 1
+    top_k: -1
+    max_tokens: 2048
+    detokenize: true
+    skip_special_tokens: false
+    include_stop_str_in_output: true
+    seed: 42
+  quantization: ascend
+  max_model_len: 8192
+  compilation_config:
+    cudagraph_mode: PIECEWISE
+    cudagraph_capture_sizes:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 1280
+    - 2048
+  enable_prefix_caching: false
+- stage_id: 1
+  max_num_seqs: 1
+  enforce_eager: true
+  devices: 4,5,6,7
+  distributed_executor_backend: mp
+  omni_kv_config:
+    need_recv_cache: true
+    enable_kv_async_prefetch: true
+    kv_prefetch_min_free_mem_ratio: 0.2
+  parallel_config:
+    tensor_parallel_size: 4
+    enable_expert_parallel: false
+  input_connectors:
+    from_stage_0: rdma_connector
+  default_sampling_params:
+    num_inference_steps: 8
+    guidance_scale: 2.5
+    seed: 42
+  quantization: ascend
+  max_num_batched_tokens: 8192
+  gpu_memory_utilization: 0.7

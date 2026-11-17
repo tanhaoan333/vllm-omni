@@ -1,0 +1,11 @@
+{
+  "requests": 2,
+  "warmups": 1,
+  "request_sha256": "deef1eea0bb2dd0fc43a87e853cc71295316129d5a34863adfcf235bf3b54bc5",
+  "e2e_s": 8.401989409991074,
+  "http_first_body_s": 8.400167199986754,
+  "ar_s": 7.052368879318237,
+  "dit_s": 1.309714436531067,
+  "ar_ttft_ms": 61.88786029815674,
+  "ar_tpot_ms": 13.278680910869719
+}

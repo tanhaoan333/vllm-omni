@@ -1,0 +1,1 @@
+{"bot_task": "think", "guidance_scale": 2.5, "model": "hunyuanimage3-mxfp8", "num_inference_steps": 8, "prompt": "一座未来城市，清晨的阳光照亮玻璃摩天大楼，蓝色天空中有几艘飞行汽车，街道上有人们行走，河流穿过城市，写实摄影风格，画面清晰，构图自然，不要文字。", "return_stage_metrics": true, "seed": 42, "size": "1024x1024", "use_system_prompt": "en_unified"}
